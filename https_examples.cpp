@@ -211,6 +211,8 @@ int main() {
   auto r1 = client.request("GET", "/match/123");
   cout << r1->content.rdbuf() << endl; // Alternatively, use the convenience function r1->content.string()
 
+  this_thread::sleep_for(chrono::seconds(6));
+
   string json_string = "{\"firstName\": \"John\",\"lastName\": \"Smith\",\"age\": 25}";
   auto r2 = client.request("POST", "/string", json_string);
   cout << r2->content.rdbuf() << endl;

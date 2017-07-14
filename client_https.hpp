@@ -46,6 +46,20 @@ namespace SimpleWeb {
       return std::make_shared<Connection>(host, port, config, std::unique_ptr<HTTPS>(new HTTPS(*io_service, context)));
     }
 
+    static void close(const std::shared_ptr<Session> &session, const error_code &ec, bool reconnect = false) {
+      session->connection->socket->async_shutdown([session, ec, reconnect](const error_code &) {
+        {
+          error_code ec;
+          session->connection->socket->lowest_layer().shutdown(asio::ip::tcp::socket::shutdown_both, ec);
+          session->connection->socket->lowest_layer().close(ec);
+        }
+        if(reconnect)
+          connect(session);
+        else
+          session->callback(ec);
+      });
+    }
+
     static void connect(const std::shared_ptr<Session> &session) {
       if(!session->connection->socket->lowest_layer().is_open()) {
         auto resolver = std::make_shared<asio::ip::tcp::resolver>(*session->io_service);
@@ -77,38 +91,28 @@ namespace SimpleWeb {
                           timer->cancel();
                         if(!ec) {
                           parse_response_header(response);
-                          if(response->status_code.empty() || response->status_code.compare(0, 3, "200") != 0) {
-                            close(session);
-                            session->callback(make_error_code::make_error_code(errc::permission_denied));
-                          }
+                          if(response->status_code.empty() || response->status_code.compare(0, 3, "200") != 0)
+                            close(session, make_error_code::make_error_code(errc::permission_denied));
                           else
                             handshake(session);
                         }
-                        else {
-                          close(session);
-                          session->callback(ec);
-                        }
+                        else
+                          close(session, ec);
                       });
                     }
-                    else {
-                      close(session);
-                      session->callback(ec);
-                    }
+                    else
+                      close(session, ec);
                   });
                 }
                 else
                   handshake(session);
               }
-              else {
-                close(session);
-                session->callback(ec);
-              }
+              else
+                close(session, ec);
             });
           }
-          else {
-            close(session);
-            session->callback(ec);
-          }
+          else
+            close(session, ec);
         });
       }
       else
@@ -122,10 +126,8 @@ namespace SimpleWeb {
           timer->cancel();
         if(!ec)
           write(session);
-        else {
-          close(session);
-          session->callback(ec);
-        }
+        else
+          close(session, ec);
       });
     }
   };

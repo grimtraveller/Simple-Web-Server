@@ -380,8 +380,10 @@ namespace SimpleWeb {
       auto timer = std::make_shared<asio::deadline_timer>(*session->io_service);
       timer->expires_from_now(boost::posix_time::seconds(timeout));
       timer->async_wait([session](const error_code &ec) {
-        if(!ec)
-          close(session);
+        if(!ec) {
+          error_code ec;
+          session->connection->socket->lowest_layer().cancel(ec);
+        }
       });
       return timer;
     }
@@ -419,10 +421,8 @@ namespace SimpleWeb {
           timer->cancel();
         if(!ec)
           read(session);
-        else {
-          close(session);
-          session->callback(ec);
-        }
+        else
+          Client<socket_type>::close(session, ec);
       });
     }
 
@@ -448,10 +448,8 @@ namespace SimpleWeb {
                   timer->cancel();
                 if(!ec)
                   session->callback(ec);
-                else {
-                  close(session);
-                  session->callback(ec);
-                }
+                else
+                  Client<socket_type>::close(session, ec);
               });
             }
             else
@@ -469,13 +467,12 @@ namespace SimpleWeb {
               if(!ec)
                 session->callback(ec);
               else {
-                close(session);
                 if(ec == asio::error::eof) {
                   error_code ec;
-                  session->callback(ec);
+                  Client<socket_type>::close(session, ec);
                 }
                 else
-                  session->callback(ec);
+                  Client<socket_type>::close(session, ec);
               }
             });
           }
@@ -485,13 +482,10 @@ namespace SimpleWeb {
         else {
           if(!session->connection->reconnecting) {
             session->connection->reconnecting = true;
-            close(session);
-            Client<socket_type>::connect(session);
+            Client<socket_type>::close(session, ec, true);
           }
-          else {
-            close(session);
-            session->callback(ec);
-          }
+          else
+            Client<socket_type>::close(session, ec);
         }
       });
     }
@@ -539,26 +533,16 @@ namespace SimpleWeb {
                 timer->cancel();
               if(!ec)
                 post_process();
-              else {
-                close(session);
-                session->callback(ec);
-              }
+              else
+                Client<socket_type>::close(session, ec);
             });
           }
           else
             post_process();
         }
-        else {
-          close(session);
-          session->callback(ec);
-        }
+        else
+          Client<socket_type>::close(session, ec);
       });
-    }
-
-    static void close(const std::shared_ptr<Session> &session) {
-      error_code ec;
-      session->connection->socket->lowest_layer().shutdown(asio::ip::tcp::socket::shutdown_both, ec);
-      session->connection->socket->lowest_layer().close(ec);
     }
   };
 
@@ -579,6 +563,18 @@ namespace SimpleWeb {
       return std::make_shared<Connection>(host, port, config, std::unique_ptr<HTTP>(new HTTP(*io_service)));
     }
 
+    static void close(const std::shared_ptr<Session> &session, const error_code &ec, bool reconnect = false) {
+      {
+        error_code ec;
+        session->connection->socket->shutdown(asio::ip::tcp::socket::shutdown_both, ec);
+        session->connection->socket->close(ec);
+      }
+      if(reconnect)
+        connect(session);
+      else
+        session->callback(ec);
+    }
+
     static void connect(const std::shared_ptr<Session> &session) {
       if(!session->connection->socket->lowest_layer().is_open()) {
         auto resolver = std::make_shared<asio::ip::tcp::resolver>(*session->io_service);
@@ -596,16 +592,12 @@ namespace SimpleWeb {
                 session->connection->socket->set_option(option);
                 write(session);
               }
-              else {
-                close(session);
-                session->callback(ec);
-              }
+              else
+                close(session, ec);
             });
           }
-          else {
-            close(session);
-            session->callback(ec);
-          }
+          else
+            close(session, ec);
         });
       }
       else
